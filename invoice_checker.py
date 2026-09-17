@@ -173,7 +173,6 @@ def load_excel_rows(excel_path: str, sheet_name: str) -> list[ExcelRow]:
 
 
 # ------------------------------- TRÍCH XUẤT DỮ LIỆU PDF -------------------------------
-
 def extract_pdf_text(pdf_path: str) -> str:
     """Trích toàn bộ văn bản từ PDF (nhiều trang)."""
     parts: list[str] = []
@@ -181,66 +180,45 @@ def extract_pdf_text(pdf_path: str) -> str:
         for page in pdf.pages:
             text = page.extract_text()
             if text:
-                parts.append(text)
+                # FIX: Chuẩn hóa Unicode NFD (của PDF) về NFC (của Python) ngay khi vừa đọc
+                # Xử lý dứt điểm các lỗi không nhận ra Tiếng Việt (bao gồm cả chữ ký)
+                parts.append(unicodedata.normalize("NFC", text))
     return "\n".join(parts)
 
 
 def extract_invoice_no(text: str, filename: str) -> str:
-    """
-    Lấy số hóa đơn, hỗ trợ mở rộng cho các định dạng chèn chữ ở giữa như:
-      - "Số (Invoice No): 00006486"
-      - "Số hóa đơn (Invoice No): 597518"
-      - "Số(No):12345"
-    """
-    # 1) Số có kèm nhãn tiếng Anh trong ngoặc
+    """Lấy số hóa đơn, hỗ trợ mở rộng cho các định dạng bị chèn chữ ở giữa."""
     m = re.search(r"Số[^\(]*\((?:Invoice\s*)?No\.?\)\s*:?\s*(\d+)", text, re.IGNORECASE)
-    if m:
-        return m.group(1)
+    if m: return m.group(1)
 
-    # 2) Kiểu không có nhãn tiếng Anh: "Số: 00095512", "Số hóa đơn: 597518"
     m = re.search(r"Số(?: hóa đơn)?\s*:\s*(\d+)", text, re.IGNORECASE)
-    if m:
-        return m.group(1)
+    if m: return m.group(1)
 
-    # 3) Số nằm trên dòng ngay TRƯỚC nhãn: "807420\nSố (No.):"
     m = re.search(r"(\d{3,})\s*\n\s*Số\s*\(", text, re.IGNORECASE)
-    if m:
-        return m.group(1)
+    if m: return m.group(1)
 
-    # 4) Dự phòng từ tên file
     m = re.search(r"Inv[_\- ]?0*(\d+)", filename, re.IGNORECASE)
     return m.group(1) if m else ""
 
+
 AMOUNT_PATTERNS: list[tuple[re.Pattern[str], bool]] = [
-    # Grab (template cũ): "Tổng cộng số tiền đã có thuế GTGT:" + dòng kế "97.000"
     (re.compile(r"Tổng cộng số tiền đã có thuế GTGT\s*:?\s*\n?\s*([\d\.]+)", re.IGNORECASE), False),
-    # Grab (template mới): "Tổng cộng hóa đơn (Invoice total): 43.000"
     (re.compile(r"Tổng cộng hóa đơn\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+)", re.IGNORECASE), False),
-    # Nasco / DHL / Xanh SM / Green Fast / BICOM:
-    #   "Tổng cộng tiền thanh toán (Grand total): 271.269"        (Nasco/DHL, 1 số)
-    #   "Tổng cộng tiền thanh toán (Grand total): 122.877 9.123 132.000"
-    #     (Xanh SM có thêm cột 'Thành tiền sau thuế' -> lấy số CUỐI)
     (re.compile(r"Tổng cộng tiền thanh toán\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+(?:[ \t]+[\d\.]+)*)", re.IGNORECASE), True),
-    # Koi / Starbucks / Petro: "Tổng tiền thanh toán: 149.000" | "...(Total of payment): 309.000"
     (re.compile(r"Tổng tiền thanh toán\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+)", re.IGNORECASE), False),
-    # Takahiro / SACO: "Tổng cộng: 664.000 53.120 717.120" | "Tổng cộng(Total): 232.407 18.593 251.000"
-    #   -> lấy số cuối (cột 'Cộng tiền thanh toán' / giá trị sau thuế)
     (re.compile(r"Tổng cộng\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+(?:[ \t]+[\d\.]+)*)"), True),
+    # FIX: Hỗ trợ "Tổng số tiền thanh toán", cho phép quét qua nhiều dòng và bỏ qua ký tự pipe '|' của bảng
+    (re.compile(r"Tổng số tiền thanh toán\s*(?:\([^)]*\))?\s*:?[\s\|]*([\d\.]+(?:[\s\|]+[\d\.]+)*)", re.IGNORECASE), True),
 ]
 
 
 def extract_amount(text: str) -> str:
-    """
-    Lấy tổng tiền thanh toán (đã bao gồm thuế) từ các mẫu phổ biến.
-
-    Nếu dòng tổng cộng có nhiều số trên cùng một dòng (vd: thành tiền trước thuế,
-    tiền thuế, thành tiền sau thuế), ưu tiên lấy số CUỐI — giá trị cột
-    'Thành tiền sau thuế' thay vì cột 'Thành tiền' (chưa thuế).
-    """
+    """Lấy tổng tiền thanh toán (đã bao gồm thuế) từ các mẫu phổ biến."""
     for pattern, take_last in AMOUNT_PATTERNS:
         m = pattern.search(text)
         if m:
-            numbers = re.findall(r"[\d\.]+", m.group(1))
+            # FIX: Lọc bỏ các dấu chấm đứng đơn độc do lỗi nhiễu quét PDF
+            numbers = [n for n in re.findall(r"[\d\.]+", m.group(1)) if n != "."]
             if numbers:
                 return numbers[-1] if take_last else numbers[0]
     return ""
@@ -251,9 +229,8 @@ DATE_RE = re.compile(
     re.IGNORECASE,
 )
 
-
 def extract_date(text: str) -> str:
-    """Ngày lập hóa đơn -> 'DD.MM.YYYY' (hỗ trợ 'Ngày (date)...' lẫn 'Ngày 21 tháng 08 năm 2026')."""
+    """Ngày lập hóa đơn -> 'DD.MM.YYYY'."""
     m = DATE_RE.search(text)
     if m:
         d, mo, y = m.groups()
@@ -262,52 +239,42 @@ def extract_date(text: str) -> str:
 
 
 def extract_company(text: str) -> str:
-    """Tên đơn vị mua hàng (bỏ qua 'Tên đơn vị bán hàng')."""
-    m = re.search(r"Tên đơn vị\s*\('?Company'?s?\s*name\)\s*:\s*(.+)", text, re.IGNORECASE)
+    """Tên đơn vị mua hàng."""
+    # FIX: Bổ sung quét thêm nhãn 'Tên người mua (Buyer)' thay vì chỉ 'Tên đơn vị'
+    m = re.search(r"(?:Tên đơn vị|Tên người mua)\s*(?:\([^)]*\))?\s*:\s*(.+)", text, re.IGNORECASE)
     if m:
         return m.group(1).strip()
-    m = re.search(r"Tên đơn vị\s*:\s*(.+)", text)  # kiểu Koi, không có nhãn tiếng Anh
-    if m:
-        return m.group(1).strip()
-    # Dự phòng: PDF không có nhãn rõ ràng (vd: Starbucks) — dò tên công ty mua hàng
+    
     if "ACCLIME" in text.upper():
         return EXPECTED_COMPANY
     return ""
 
 
 def extract_taxcode(text: str) -> str:
-    """
-    Lấy mã số thuế NGƯỜI MUA (ACCLIME). Ưu tiên bám theo EXPECTED_TAXCODE.
-    Hỗ trợ đọc cả nhãn "MST" hoặc "Mã số thuế" ở mọi định dạng hoa/thường.
-    """
+    """Lấy MST NGƯỜI MUA. Ưu tiên rà soát theo EXPECTED_TAXCODE."""
     codes = [
         re.sub(r"[^\d]", "", m.group(1))
-        # Thêm từ khóa "MST" và bật cờ re.IGNORECASE
+        # FIX: Cho phép nhãn "MST", bỏ qua lỗi viết hoa/thường
         for m in re.finditer(r"(?:Mã số thuế|MST)\s*(?:\([^)]*\))?\s*:\s*([\d\s\-]+)", text, re.IGNORECASE)
     ]
     codes = [c for c in codes if c]
-    
     if not codes:
         codes = re.findall(r"\b\d{10}\b", text)
-        
     if not codes:
         return ""
     
-    # Quét trong danh sách các MST tìm được, lấy đúng mã của ACCLIME như đã cấu hình
+    # FIX: Quét trong danh sách các MST tìm được, lấy đúng mã ACCLIME nếu có
     for c in codes:
         if c == EXPECTED_TAXCODE:
             return c
-            
-    # Nếu không khớp EXPECTED_TAXCODE, mặc định lấy mã cuối cùng (thường là của người mua)
     return codes[-1]
 
-SIGNATURE_RE = re.compile(r"(Signature Valid|Ký bởi|ký điện tử|Signed by|đã ký)", re.IGNORECASE)
 
+SIGNATURE_RE = re.compile(r"(Signature Valid|Ký bởi|ký điện tử|Signed by|đã ký)", re.IGNORECASE)
 
 def extract_signature(text: str) -> bool:
     """Kiểm tra sự hiện diện của khối chữ ký / chữ ký số trong hóa đơn."""
     return bool(SIGNATURE_RE.search(text))
-
 
 def parse_pdf(pdf_path: str) -> PdfData:
     """Trích xuất toàn bộ thông tin cần thiết từ một file PDF."""
