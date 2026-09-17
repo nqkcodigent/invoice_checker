@@ -6,7 +6,7 @@ Luồng xử lý:
     2. Quét toàn bộ file PDF (đệ quy) trong thư mục PDF_FOLDER.
     3. Trích xuất từ PDF: Số chứng từ, ngày lập, thành tiền, tên công ty,
        mã số thuế, chữ ký (hỗ trợ nhiều định dạng: Grab, Nasco, DHL, Koi,
-       Starbucks, Takahiro...).
+       Starbucks, Takahiro, Xanh SM, SACO, BICOM, Green Fast, Petro...).
     4. Khớp từng PDF với dòng Excel theo Số chứng từ (bỏ số 0 ở đầu).
     5. So sánh từng tiêu chí, xuất kết quả ra console và file HTML
        (report.html) để rà soát bằng tay.
@@ -217,17 +217,27 @@ AMOUNT_PATTERNS: list[tuple[re.Pattern[str], bool]] = [
     (re.compile(r"Tổng cộng số tiền đã có thuế GTGT\s*:?\s*\n?\s*([\d\.]+)", re.IGNORECASE), False),
     # Grab (template mới): "Tổng cộng hóa đơn (Invoice total): 43.000"
     (re.compile(r"Tổng cộng hóa đơn\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+)", re.IGNORECASE), False),
-    # Nasco / DHL: "Tổng cộng tiền thanh toán (Grand total): 293.164"
-    (re.compile(r"Tổng cộng tiền thanh toán\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+)", re.IGNORECASE), False),
-    # Koi / Starbucks: "Tổng tiền thanh toán: 149.000" | "...(Total of payment): 309.000"
+    # Nasco / DHL / Xanh SM / Green Fast / BICOM:
+    #   "Tổng cộng tiền thanh toán (Grand total): 271.269"        (Nasco/DHL, 1 số)
+    #   "Tổng cộng tiền thanh toán (Grand total): 122.877 9.123 132.000"
+    #     (Xanh SM có thêm cột 'Thành tiền sau thuế' -> lấy số CUỐI)
+    (re.compile(r"Tổng cộng tiền thanh toán\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+(?:[ \t]+[\d\.]+)*)", re.IGNORECASE), True),
+    # Koi / Starbucks / Petro: "Tổng tiền thanh toán: 149.000" | "...(Total of payment): 309.000"
     (re.compile(r"Tổng tiền thanh toán\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+)", re.IGNORECASE), False),
-    # Takahiro: "Tổng cộng: 664.000 53.120 717.120" -> lấy số cuối
-    (re.compile(r"Tổng cộng\s*:\s*([\d\.\s]+)"), True),
+    # Takahiro / SACO: "Tổng cộng: 664.000 53.120 717.120" | "Tổng cộng(Total): 232.407 18.593 251.000"
+    #   -> lấy số cuối (cột 'Cộng tiền thanh toán' / giá trị sau thuế)
+    (re.compile(r"Tổng cộng\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+(?:[ \t]+[\d\.]+)*)"), True),
 ]
 
 
 def extract_amount(text: str) -> str:
-    """Lấy tổng tiền thanh toán (đã bao gồm thuế) từ các mẫu phổ biến."""
+    """
+    Lấy tổng tiền thanh toán (đã bao gồm thuế) từ các mẫu phổ biến.
+
+    Nếu dòng tổng cộng có nhiều số trên cùng một dòng (vd: thành tiền trước thuế,
+    tiền thuế, thành tiền sau thuế), ưu tiên lấy số CUỐI — giá trị cột
+    'Thành tiền sau thuế' thay vì cột 'Thành tiền' (chưa thuế).
+    """
     for pattern, take_last in AMOUNT_PATTERNS:
         m = pattern.search(text)
         if m:
