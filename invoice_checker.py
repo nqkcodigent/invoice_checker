@@ -1,18 +1,5 @@
 """
 invoice_checker.py — Đối chiếu hóa đơn điện tử (PDF) với bảng tổng hợp chi phí (Excel).
-
-Luồng xử lý:
-    1. Đọc sheet 'Claim' trong file Excel, tự động tìm dòng tiêu đề bảng.
-    2. Quét toàn bộ file PDF (đệ quy) trong thư mục PDF_FOLDER.
-    3. Trích xuất từ PDF: Số chứng từ, ngày lập, thành tiền, tên công ty,
-       mã số thuế, chữ ký (hỗ trợ nhiều định dạng: Grab, Nasco, DHL, Koi,
-       Starbucks, Takahiro, Xanh SM, SACO, BICOM, Green Fast, Petro...).
-    4. Khớp từng PDF với dòng Excel theo Số chứng từ (bỏ số 0 ở đầu).
-    5. So sánh từng tiêu chí, xuất kết quả ra console và file HTML
-       (report.html) để rà soát bằng tay.
-
-Cách chạy:
-    python invoice_checker.py
 """
 
 from __future__ import annotations
@@ -36,9 +23,9 @@ from tabulate import tabulate
 
 # ============================== CẤU HÌNH ==============================
 EXCEL_FILE = "SIM_FM-ACC-03-4 Expense Claim_NguyenHuyenNgan_August.2026.xlsx"
-SHEET_NAME = "Claim"                    # sheet chứa bảng tổng hợp chi phí
-PDF_FOLDER = "August.26/August.26"      # thư mục chứa hóa đơn PDF (đệ quy)
-HEADER_KEYWORD = "số chứng từ"          # từ khóa để dò dòng tiêu đề trong Excel
+SHEET_NAME = "Claim"                    
+PDF_FOLDER = "August.26/August.26"      
+HEADER_KEYWORD = "số chứng từ"          
 EXPECTED_COMPANY = "CÔNG TY TNHH ACCLIME OUTSOURCING"
 EXPECTED_TAXCODE = "0316791220"
 OUTPUT_HTML = "report.html"
@@ -49,19 +36,16 @@ OUTPUT_HTML = "report.html"
 
 @dataclass
 class ExcelRow:
-    """Một dòng chi phí trong bảng tổng hợp Excel."""
     stt: str
-    no: str                 # Số chứng từ (hiển thị)
-    no_norm: str            # Số chứng từ đã chuẩn hóa (bỏ số 0 ở đầu)
-    date: str               # Ngày chứng từ dạng DD.MM.YYYY
-    amount: str             # Thành tiền (đã làm sạch, dạng số thuần)
+    no: str                 
+    no_norm: str            
+    date: str               
+    amount: str             
     description: str = ""
     notes: str = ""
 
-
 @dataclass
 class PdfData:
-    """Dữ liệu trích xuất từ một file PDF."""
     path: str
     no: str = ""
     no_norm: str = ""
@@ -72,35 +56,28 @@ class PdfData:
     has_signature: bool = False
     error: str = ""
 
-
 @dataclass
 class Result:
-    """Kết quả đối chiếu của một PDF (hoặc một dòng Excel thiếu PDF)."""
     pdf: PdfData | None
     excel: ExcelRow | None
     fields: dict[str, tuple[str, str, bool]] = field(default_factory=dict)
-    status: str = ""        # "ok" | "mismatch" | "no_excel" | "no_pdf" | "error"
+    status: str = ""        
     status_label: str = ""
 
 
 # ------------------------------- TIỆN ÍCH CHUẨN HÓA -------------------------------
 
 def norm_number(value: Any) -> str:
-    """'00807420' / '807420' / 807420.0 -> '807420' (bỏ ký tự không phải số, bỏ số 0 ở đầu)."""
     digits = re.sub(r"[^\d]", "", str(value))
     return str(int(digits)) if digits else ""
 
-
 def norm_amount(value: Any) -> str:
-    """'97.000' / '97000' / 97000.0 / '2.122.200' -> '97000' / '2122200'."""
     s = str(value).strip()
-    if s.endswith(".0"):          # số thực từ Excel: 97000.0
+    if s.endswith(".0"):          
         s = s[:-2]
     return s.replace(".", "").replace(",", "")
 
-
 def norm_date(value: Any) -> str:
-    """Chuẩn hóa ngày về dạng DD.MM.YYYY (chấp nhận datetime hoặc chuỗi '04.08.2026')."""
     if isinstance(value, (datetime, pd.Timestamp)):
         return pd.Timestamp(value).strftime("%d.%m.%Y")
     s = str(value).strip()
@@ -115,25 +92,19 @@ def norm_date(value: Any) -> str:
 # ------------------------------- ĐỌC FILE EXCEL -------------------------------
 
 def _find_col(df: pd.DataFrame, *keywords: str) -> str | None:
-    """Tìm tên cột chứa một trong các từ khóa (không phân biệt hoa thường)."""
     for col in df.columns:
         low = str(col).lower()
         if any(k.lower() in low for k in keywords):
             return col
     return None
 
-
 def load_excel_rows(excel_path: str, sheet_name: str) -> list[ExcelRow]:
-    """Đọc bảng tổng hợp, tự động dò dòng tiêu đề, trả về danh sách dòng chi phí."""
     if not os.path.exists(excel_path):
         raise FileNotFoundError(f"Không tìm thấy file Excel: {excel_path}")
 
     raw = pd.read_excel(excel_path, sheet_name=sheet_name, header=None)
     header_idx = next(
-        (
-            i for i, row in raw.iterrows()
-            if HEADER_KEYWORD in " ".join(str(c) for c in row.values).lower()
-        ),
+        (i for i, row in raw.iterrows() if HEADER_KEYWORD in " ".join(str(c) for c in row.values).lower()),
         -1,
     )
     if header_idx == -1:
@@ -152,12 +123,10 @@ def load_excel_rows(excel_path: str, sheet_name: str) -> list[ExcelRow]:
     rows: list[ExcelRow] = []
     for _, r in df.iterrows():
         no = r.get(col_no) if col_no else None
-        if pd.isna(no):
-            continue
+        if pd.isna(no): continue
         no_str = str(no).strip()
         no_norm = norm_number(no_str)
-        if not no_norm:   # bỏ qua dòng không phải số (vd: chữ ký 'Requested by/...' nằm nhầm cột)
-            continue
+        if not no_norm: continue
         rows.append(
             ExcelRow(
                 stt=str(r.get(col_stt, "")).strip() if col_stt else "",
@@ -173,21 +142,22 @@ def load_excel_rows(excel_path: str, sheet_name: str) -> list[ExcelRow]:
 
 
 # ------------------------------- TRÍCH XUẤT DỮ LIỆU PDF -------------------------------
+
 def extract_pdf_text(pdf_path: str) -> str:
-    """Trích toàn bộ văn bản từ PDF (nhiều trang)."""
+    """Trích toàn bộ văn bản từ PDF và CỰC KỲ QUAN TRỌNG: Chuẩn hóa font Unicode (NFC)"""
     parts: list[str] = []
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
             if text:
-                # FIX: Chuẩn hóa Unicode NFD (của PDF) về NFC (của Python) ngay khi vừa đọc
-                # Xử lý dứt điểm các lỗi không nhận ra Tiếng Việt (bao gồm cả chữ ký)
+                # Xử lý dứt điểm lỗi máy tính đọc tiếng Việt từ PDF bị tách rấu (NFD -> NFC)
+                # Nếu không có dòng này, regex tìm chữ ký sẽ luôn báo "Không"
                 parts.append(unicodedata.normalize("NFC", text))
     return "\n".join(parts)
 
 
 def extract_invoice_no(text: str, filename: str) -> str:
-    """Lấy số hóa đơn, hỗ trợ mở rộng cho các định dạng bị chèn chữ ở giữa."""
+    """Xử lý định dạng lồng chữ: 'Số hóa đơn (Invoice No): 597518'"""
     m = re.search(r"Số[^\(]*\((?:Invoice\s*)?No\.?\)\s*:?\s*(\d+)", text, re.IGNORECASE)
     if m: return m.group(1)
 
@@ -202,23 +172,22 @@ def extract_invoice_no(text: str, filename: str) -> str:
 
 
 AMOUNT_PATTERNS: list[tuple[re.Pattern[str], bool]] = [
+    # Vietnam Airlines: "Tổng số tiền thanh toán (Grand Total...):\n | | 5.899.000"
+    (re.compile(r"Tổng số tiền thanh toán\s*(?:\([^)]*\))?\s*:?[\s\|]*([\d\.]+(?:[\s\|]+[\d\.]+)*)", re.IGNORECASE), True),
     (re.compile(r"Tổng cộng số tiền đã có thuế GTGT\s*:?\s*\n?\s*([\d\.]+)", re.IGNORECASE), False),
     (re.compile(r"Tổng cộng hóa đơn\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+)", re.IGNORECASE), False),
     (re.compile(r"Tổng cộng tiền thanh toán\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+(?:[ \t]+[\d\.]+)*)", re.IGNORECASE), True),
     (re.compile(r"Tổng tiền thanh toán\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+)", re.IGNORECASE), False),
     (re.compile(r"Tổng cộng\s*(?:\([^)]*\))?\s*:?\s*([\d\.]+(?:[ \t]+[\d\.]+)*)"), True),
-    # FIX: Hỗ trợ "Tổng số tiền thanh toán", cho phép quét qua nhiều dòng và bỏ qua ký tự pipe '|' của bảng
-    (re.compile(r"Tổng số tiền thanh toán\s*(?:\([^)]*\))?\s*:?[\s\|]*([\d\.]+(?:[\s\|]+[\d\.]+)*)", re.IGNORECASE), True),
 ]
 
-
 def extract_amount(text: str) -> str:
-    """Lấy tổng tiền thanh toán (đã bao gồm thuế) từ các mẫu phổ biến."""
+    """Lấy tổng tiền thanh toán và lọc bỏ nhiễu dấu pipe '|' của bảng."""
     for pattern, take_last in AMOUNT_PATTERNS:
         m = pattern.search(text)
         if m:
-            # FIX: Lọc bỏ các dấu chấm đứng đơn độc do lỗi nhiễu quét PDF
-            numbers = [n for n in re.findall(r"[\d\.]+", m.group(1)) if n != "."]
+            # Lọc chỉ giữ lại các cụm số nguyên vẹn, loại bỏ dấu chấm đứng một mình
+            numbers = [n for n in re.findall(r"[\d\.]+", m.group(1)) if len(n.replace('.', '')) > 0]
             if numbers:
                 return numbers[-1] if take_last else numbers[0]
     return ""
@@ -230,7 +199,6 @@ DATE_RE = re.compile(
 )
 
 def extract_date(text: str) -> str:
-    """Ngày lập hóa đơn -> 'DD.MM.YYYY'."""
     m = DATE_RE.search(text)
     if m:
         d, mo, y = m.groups()
@@ -239,22 +207,18 @@ def extract_date(text: str) -> str:
 
 
 def extract_company(text: str) -> str:
-    """Tên đơn vị mua hàng."""
-    # FIX: Bổ sung quét thêm nhãn 'Tên người mua (Buyer)' thay vì chỉ 'Tên đơn vị'
+    # Quét nhãn 'Tên người mua (Buyer)' thay vì chỉ 'Tên đơn vị'
     m = re.search(r"(?:Tên đơn vị|Tên người mua)\s*(?:\([^)]*\))?\s*:\s*(.+)", text, re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
-    
-    if "ACCLIME" in text.upper():
-        return EXPECTED_COMPANY
+    if m: return m.group(1).strip()
+    if "ACCLIME" in text.upper(): return EXPECTED_COMPANY
     return ""
 
 
 def extract_taxcode(text: str) -> str:
-    """Lấy MST NGƯỜI MUA. Ưu tiên rà soát theo EXPECTED_TAXCODE."""
+    """Quét toàn bộ mã số thuế và ưu tiên lấy mã khớp cấu hình EXPECTED_TAXCODE"""
     codes = [
         re.sub(r"[^\d]", "", m.group(1))
-        # FIX: Cho phép nhãn "MST", bỏ qua lỗi viết hoa/thường
+        # Cho phép nhãn "MST", quét không phân biệt hoa/thường
         for m in re.finditer(r"(?:Mã số thuế|MST)\s*(?:\([^)]*\))?\s*:\s*([\d\s\-]+)", text, re.IGNORECASE)
     ]
     codes = [c for c in codes if c]
@@ -263,25 +227,23 @@ def extract_taxcode(text: str) -> str:
     if not codes:
         return ""
     
-    # FIX: Quét trong danh sách các MST tìm được, lấy đúng mã ACCLIME nếu có
+    # Lấy đúng mã ACCLIME (0316791220) trong số các mã tìm được
     for c in codes:
-        if c == EXPECTED_TAXCODE:
-            return c
+        if c == EXPECTED_TAXCODE: return c
     return codes[-1]
 
 
 SIGNATURE_RE = re.compile(r"(Signature Valid|Ký bởi|ký điện tử|Signed by|đã ký)", re.IGNORECASE)
 
 def extract_signature(text: str) -> bool:
-    """Kiểm tra sự hiện diện của khối chữ ký / chữ ký số trong hóa đơn."""
     return bool(SIGNATURE_RE.search(text))
 
+
 def parse_pdf(pdf_path: str) -> PdfData:
-    """Trích xuất toàn bộ thông tin cần thiết từ một file PDF."""
     data = PdfData(path=pdf_path)
     try:
         text = extract_pdf_text(pdf_path)
-    except Exception as exc:  # noqa: BLE001 - lỗi file riêng lẻ không làm dừng toàn bộ
+    except Exception as exc: 
         data.error = f"Lỗi đọc file: {exc}"
         return data
 
@@ -298,22 +260,13 @@ def parse_pdf(pdf_path: str) -> PdfData:
 # ------------------------------- KHỚP & SO SÁNH -------------------------------
 
 def match_excel_row(excel_rows: list[ExcelRow], pdf_no_norm: str) -> ExcelRow | None:
-    """Tìm dòng Excel khớp số chứng từ (so sánh sau khi bỏ số 0 ở đầu)."""
-    if not pdf_no_norm:
-        return None
+    if not pdf_no_norm: return None
     return next((r for r in excel_rows if r.no_norm == pdf_no_norm), None)
 
-
 def _fold_diacritics(s: str) -> str:
-    """Bỏ dấu tiếng Việt để so sánh không phân biệt 'CÔNG' vs 'CONG'."""
-    return "".join(
-        c for c in unicodedata.normalize("NFD", s.lower())
-        if unicodedata.category(c) != "Mn"
-    )
-
+    return "".join(c for c in unicodedata.normalize("NFD", s.lower()) if unicodedata.category(c) != "Mn")
 
 def compare(excel: ExcelRow, pdf: PdfData) -> dict[str, tuple[str, str, bool]]:
-    """So sánh từng tiêu chí, trả về dict: tiêu chí -> (giá trị Excel, giá trị PDF, khớp?)."""
     no_ok = bool(excel.no_norm) and excel.no_norm == pdf.no_norm
     date_ok = bool(excel.date) and excel.date == pdf.date
     amount_ok = bool(excel.amount) and excel.amount == pdf.amount
@@ -328,13 +281,9 @@ def compare(excel: ExcelRow, pdf: PdfData) -> dict[str, tuple[str, str, bool]]:
         "signature": ("Có chữ ký", "Có" if pdf.has_signature else "Không", pdf.has_signature),
     }
 
-
 def build_result(pdf: PdfData, excel: ExcelRow | None) -> Result:
-    """Tạo kết quả đối chiếu cho một PDF."""
-    if pdf.error:
-        return Result(pdf=pdf, excel=excel, status="error", status_label="Lỗi đọc file")
-    if excel is None:
-        return Result(pdf=pdf, excel=None, status="no_excel", status_label="Không có trong Excel")
+    if pdf.error: return Result(pdf=pdf, excel=excel, status="error", status_label="Lỗi đọc file")
+    if excel is None: return Result(pdf=pdf, excel=None, status="no_excel", status_label="Không có trong Excel")
     fields = compare(excel, pdf)
     all_ok = all(ok for _, _, ok in fields.values())
     status = "ok" if all_ok else "mismatch"
@@ -345,14 +294,12 @@ def build_result(pdf: PdfData, excel: ExcelRow | None) -> Result:
 # ------------------------------- XUẤT KẾT QUẢ -------------------------------
 
 def export_csv(results: list[Result], excel_missing: list[ExcelRow]) -> str:
-    """Tạo nội dung CSV (kèm BOM để Excel hiển thị đúng tiếng Việt)."""
     import csv
     header = ["STT", "File PDF", "Số CT (Excel)", "Số CT (PDF)", "Ngày (Excel)", "Ngày (PDF)",
               "Thành tiền (Excel)", "Thành tiền (PDF)", "Tên công ty", "Mã số thuế", "Chữ ký", "Kết luận", "Ghi chú"]
     rows: list[list[str]] = []
     for r in results:
-        if r.pdf is None:
-            continue
+        if r.pdf is None: continue
         pdf = r.pdf
         stt = r.excel.stt if r.excel else ""
         no_ex = r.excel.no if r.excel else ""
@@ -375,11 +322,10 @@ def export_csv(results: list[Result], excel_missing: list[ExcelRow]) -> str:
     writer = csv.writer(buf)
     writer.writerow(header)
     writer.writerows(rows)
-    return "\ufeff" + buf.getvalue()  # BOM để Excel nhận diện UTF-8
+    return "\ufeff" + buf.getvalue()
 
 
 def render_console(results: list[Result], excel_missing: list[ExcelRow]) -> None:
-    """In bảng tổng hợp ra console."""
     matched = sum(1 for r in results if r.status == "ok")
     mismatch = sum(1 for r in results if r.status == "mismatch")
     no_excel = sum(1 for r in results if r.status == "no_excel")
@@ -395,27 +341,18 @@ def render_console(results: list[Result], excel_missing: list[ExcelRow]) -> None
     headers = ["STT", "File PDF", "Số CT (Excel)", "Số CT (PDF)", "Ngày", "Thành tiền", "MST", "Chữ ký", "Kết luận"]
     table: list[list[str]] = []
     for r in results:
-        if r.pdf is None:
-            continue
+        if r.pdf is None: continue
         stt = r.excel.stt if r.excel else "—"
         no_ex = r.excel.no if r.excel else "—"
-        no_pdf = r.pdf.no
-        date = r.pdf.date
-        amount = r.pdf.amount or "—"
-        tax = r.pdf.tax or "—"
-        sign = "✅" if r.pdf.has_signature else "❌"
-        table.append([stt, os.path.basename(r.pdf.path), no_ex, no_pdf, date, amount, tax, sign, r.status_label])
+        table.append([stt, os.path.basename(r.pdf.path), no_ex, r.pdf.no, r.pdf.date, r.pdf.amount or "—", r.pdf.tax or "—", "✅" if r.pdf.has_signature else "❌", r.status_label])
     print(tabulate(table, headers=headers, tablefmt="fancy_grid"))
-    print(f"\n📝 Chi tiết từng trường (rà soát tay): mở file {OUTPUT_HTML} bằng trình duyệt.\n")
 
 
 def render_html(results: list[Result], excel_missing: list[ExcelRow]) -> str:
-    """Tạo báo cáo HTML (bảng tìm kiếm, lọc trạng thái, sắp xếp theo cột)."""
     rows_json: list[dict[str, Any]] = []
 
     for r in results:
-        if r.pdf is None:
-            continue
+        if r.pdf is None: continue
         pdf = r.pdf
         base = {
             "stt": r.excel.stt if r.excel else "—",
@@ -455,8 +392,7 @@ def render_html(results: list[Result], excel_missing: list[ExcelRow]) -> str:
         })
 
     counts = {
-        "total": len(results),
-        "ok": sum(1 for r in results if r.status == "ok"),
+        "total": len(results), "ok": sum(1 for r in results if r.status == "ok"),
         "mismatch": sum(1 for r in results if r.status == "mismatch"),
         "no_excel": sum(1 for r in results if r.status == "no_excel"),
         "errors": sum(1 for r in results if r.status == "error"),
@@ -470,7 +406,7 @@ def render_html(results: list[Result], excel_missing: list[ExcelRow]) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Đối chiếu hóa đơn PDF ↔ Excel — {SHEET_NAME}</title>
+<title>Đối chiếu hóa đơn PDF ↔ Excel</title>
 <style>
   :root {{ --ok:#e6f4ea; --mismatch:#fdecea; --warn:#fff8e1; --border:#d0d7de; }}
   * {{ box-sizing:border-box; }}
@@ -505,7 +441,7 @@ def render_html(results: list[Result], excel_missing: list[ExcelRow]) -> str:
 </head>
 <body>
 <header>
-  <h1>📊 Đối chiếu hóa đơn PDF ↔ Excel — {html.escape(SHEET_NAME)}</h1>
+  <h1>📊 Đối chiếu hóa đơn PDF ↔ Excel</h1>
   <div class="cards">
     <div class="card"><b>{counts['total']}</b>Tổng PDF</div>
     <div class="card"><b>{counts['ok']}</b>✅ Khớp</div>
@@ -606,7 +542,6 @@ render();
 # ------------------------------- MAIN -------------------------------
 
 def find_pdfs(folder: str) -> list[str]:
-    """Tìm tất cả file PDF (đệ quy) trong thư mục."""
     pdfs: list[str] = []
     for root, _dirs, files in os.walk(folder):
         for f in sorted(files):
@@ -614,57 +549,43 @@ def find_pdfs(folder: str) -> list[str]:
                 pdfs.append(os.path.join(root, f))
     return sorted(pdfs)
 
-
 def parse_args() -> argparse.Namespace:
-    """Đọc tham số dòng lệnh, cho phép dùng lại cho các kỳ claim khác."""
-    parser = argparse.ArgumentParser(description="Đối chiếu hóa đơn PDF với bảng tổng hợp chi phí Excel.")
-    parser.add_argument("--excel", default=EXCEL_FILE, help=f"Đường dẫn file Excel (mặc định: {EXCEL_FILE})")
-    parser.add_argument("--sheet", default=SHEET_NAME, help=f"Tên sheet chứa bảng tổng hợp (mặc định: {SHEET_NAME})")
-    parser.add_argument("--pdf-folder", default=PDF_FOLDER, help=f"Thư mục chứa PDF (mặc định: {PDF_FOLDER})")
-    parser.add_argument("--output", default=OUTPUT_HTML, help=f"File báo cáo HTML (mặc định: {OUTPUT_HTML})")
-    parser.add_argument("--csv", default=None, help="File CSV xuất kết quả (mặc định: không xuất)")
-    parser.add_argument("--no-open", action="store_true", help="Không tự động mở báo cáo HTML trong trình duyệt")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--excel", default=EXCEL_FILE)
+    parser.add_argument("--sheet", default=SHEET_NAME)
+    parser.add_argument("--pdf-folder", default=PDF_FOLDER)
+    parser.add_argument("--output", default=OUTPUT_HTML)
+    parser.add_argument("--csv", default=None)
+    parser.add_argument("--no-open", action="store_true")
     return parser.parse_args()
-
 
 def main() -> None:
     args = parse_args()
-
     excel_rows = load_excel_rows(args.excel, args.sheet)
-    print(f"📋 Đã đọc {len(excel_rows)} dòng chi phí từ sheet '{args.sheet}' của {args.excel}")
-
     pdf_files = find_pdfs(args.pdf_folder)
-    print(f"📄 Tìm thấy {len(pdf_files)} file PDF trong {args.pdf_folder}\n")
-
+    
     results: list[Result] = []
     matched_nos: set[str] = set()
 
     for pdf_path in pdf_files:
         pdf = parse_pdf(pdf_path)
         excel = match_excel_row(excel_rows, pdf.no_norm) if not pdf.error else None
-        if excel is not None:
-            matched_nos.add(excel.no_norm)
+        if excel is not None: matched_nos.add(excel.no_norm)
         results.append(build_result(pdf, excel))
 
     excel_missing = [r for r in excel_rows if r.no_norm not in matched_nos]
-
     render_console(results, excel_missing)
 
     with open(args.output, "w", encoding="utf-8") as f:
         f.write(render_html(results, excel_missing))
-    print(f"💾 Đã xuất báo cáo HTML: {os.path.abspath(args.output)}")
 
     if args.csv:
         with open(args.csv, "w", encoding="utf-8", newline="") as f:
             f.write(export_csv(results, excel_missing))
-        print(f"📄 Đã xuất CSV: {os.path.abspath(args.csv)}")
 
     if not args.no_open and sys.platform.startswith("win"):
-        try:
-            webbrowser.open(os.path.abspath(args.output).replace("\\", "/"))
-        except Exception:  # noqa: BLE001 - không chặn luồng chính nếu không mở được
-            pass
-
+        try: webbrowser.open(os.path.abspath(args.output).replace("\\", "/"))
+        except Exception: pass
 
 if __name__ == "__main__":
     main()
