@@ -182,16 +182,29 @@ AMOUNT_PATTERNS: list[tuple[re.Pattern[str], bool]] = [
 ]
 
 def extract_amount(text: str) -> str:
-    """Lấy tổng tiền thanh toán và lọc bỏ nhiễu dấu pipe '|' của bảng."""
-    for pattern, take_last in AMOUNT_PATTERNS:
+    """
+    Chiến thuật Mới: Tìm khối text ngay sau từ khóa (khoảng 80 ký tự) và quét tất cả các số bên trong.
+    Khắc phục triệt để lỗi PDF xuống dòng, chèn ký tự bảng (|), hoặc khoảng trắng nhiễu.
+    """
+    PATTERNS = [
+        (re.compile(r"Tổng số tiền thanh toán(.{1,80})", re.IGNORECASE | re.DOTALL), True),
+        (re.compile(r"Tổng cộng tiền thanh toán(.{1,80})", re.IGNORECASE | re.DOTALL), True),
+        (re.compile(r"Tổng cộng số tiền đã có thuế GTGT(.{1,80})", re.IGNORECASE | re.DOTALL), False),
+        (re.compile(r"Tổng cộng hóa đơn(.{1,80})", re.IGNORECASE | re.DOTALL), False),
+        (re.compile(r"Tổng tiền thanh toán(.{1,80})", re.IGNORECASE | re.DOTALL), False),
+        (re.compile(r"Tổng cộng([^a-z]{1,40})", re.IGNORECASE | re.DOTALL), True),
+    ]
+    
+    for pattern, take_last in PATTERNS:
         m = pattern.search(text)
         if m:
-            # Lọc chỉ giữ lại các cụm số nguyên vẹn, loại bỏ dấu chấm đứng một mình
-            numbers = [n for n in re.findall(r"[\d\.]+", m.group(1)) if len(n.replace('.', '')) > 0]
+            block = m.group(1)
+            # Lọc trong vòng 80 ký tự đó, rút ra tất cả các cụm số có dạng tiền (vd: 5.899.000) hoặc số liền
+            numbers = re.findall(r"\d{1,3}(?:\.\d{3})+|\d+", block)
             if numbers:
                 return numbers[-1] if take_last else numbers[0]
+                
     return ""
-
 
 DATE_RE = re.compile(
     r"Ngày\s*(?:\([^)]*\))?\s*(\d{1,2})\s*tháng\s*(?:\([^)]*\))?\s*(\d{1,2})\s*năm\s*(?:\([^)]*\))?\s*(\d{4})",
@@ -236,7 +249,30 @@ def extract_taxcode(text: str) -> str:
 SIGNATURE_RE = re.compile(r"(Signature Valid|Ký bởi|ký điện tử|Signed by|đã ký)", re.IGNORECASE)
 
 def extract_signature(text: str) -> bool:
-    return bool(SIGNATURE_RE.search(text))
+    """
+    Chiến thuật Mới: San phẳng mọi chướng ngại vật từ PDF.
+    Xóa sạch khoảng trắng, ký tự ẩn, dấu tiếng Việt để chống lại lỗi font bị rời rạc (vd: 'K ý  đ i ệ n').
+    """
+    # 1. Thử bắt bằng regex chuẩn
+    if re.search(r"(Signature Valid|Ký bởi|ký điện tử|Signed by|đã ký|Signed date|Ký ngày)", text, re.IGNORECASE):
+        return True
+    
+    # 2. Xử lý hạng nặng: Cạo sạch khoảng trắng, xuống dòng, và các ký tự ẩn tàng hình
+    text_clean = re.sub(r"[\s\x00-\x1f]", "", text.lower())
+    
+    # Bỏ toàn bộ dấu Tiếng Việt (NFD)
+    text_clean = "".join(c for c in unicodedata.normalize("NFD", text_clean) if unicodedata.category(c) != "Mn")
+    
+    # Đổi ký tự đặc biệt 'đ' thành 'd'
+    text_clean = text_clean.replace("đ", "d")
+    
+    # Từ khóa chữ ký bây giờ được so sánh trên chuỗi tiếng Việt không dấu, không khoảng trắng
+    keywords = [
+        "signaturevalid", "kyboi", "kydientu", "signedby", 
+        "dakydientu", "kyngay", "signeddate", "daduocky"
+    ]
+    
+    return any(k in text_clean for k in keywords)
 
 
 def parse_pdf(pdf_path: str) -> PdfData:
