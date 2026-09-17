@@ -187,30 +187,29 @@ def extract_pdf_text(pdf_path: str) -> str:
 
 def extract_invoice_no(text: str, filename: str) -> str:
     """
-    Lấy số hóa đơn, hỗ trợ cả 2 kiểu bố cục:
-      - Số SAU nhãn: 'Số (Invoice No): 00006486' | 'Số: 00095512'
-      - Số TRƯỚC nhãn: '807420' / 'Số (No.):' (Grab, DHL, Starbucks)
-    Dự phòng cuối cùng: lấy từ tên file 'Inv_00807420'.
+    Lấy số hóa đơn, hỗ trợ mở rộng cho các định dạng chèn chữ ở giữa như:
+      - "Số (Invoice No): 00006486"
+      - "Số hóa đơn (Invoice No): 597518"
+      - "Số(No):12345"
     """
-    # 1) Số trên cùng dòng với nhãn: "Số (Invoice No): 00006486" / "Số(No):12345"
-    m = re.search(r"Số\s*\((?:Invoice\s*)?No\.?\)\s*:?\s*(\d+)", text, re.IGNORECASE)
+    # 1) Số có kèm nhãn tiếng Anh trong ngoặc
+    m = re.search(r"Số[^\(]*\((?:Invoice\s*)?No\.?\)\s*:?\s*(\d+)", text, re.IGNORECASE)
     if m:
         return m.group(1)
 
-    # 2) Kiểu Koi: "Số: 00095512" (không có nhãn tiếng Anh)
-    m = re.search(r"Số\s*:\s*(\d+)", text)
+    # 2) Kiểu không có nhãn tiếng Anh: "Số: 00095512", "Số hóa đơn: 597518"
+    m = re.search(r"Số(?: hóa đơn)?\s*:\s*(\d+)", text, re.IGNORECASE)
     if m:
         return m.group(1)
 
     # 3) Số nằm trên dòng ngay TRƯỚC nhãn: "807420\nSố (No.):"
-    m = re.search(r"(\d{3,})\s*\n\s*Số\s*\(", text)
+    m = re.search(r"(\d{3,})\s*\n\s*Số\s*\(", text, re.IGNORECASE)
     if m:
         return m.group(1)
 
-    # 4) Dự phòng từ tên file: "12. Inv_00873795_Grab.pdf" -> 00873795
+    # 4) Dự phòng từ tên file
     m = re.search(r"Inv[_\- ]?0*(\d+)", filename, re.IGNORECASE)
     return m.group(1) if m else ""
-
 
 AMOUNT_PATTERNS: list[tuple[re.Pattern[str], bool]] = [
     # Grab (template cũ): "Tổng cộng số tiền đã có thuế GTGT:" + dòng kế "97.000"
@@ -278,23 +277,29 @@ def extract_company(text: str) -> str:
 
 def extract_taxcode(text: str) -> str:
     """
-    Lấy mã số thuế NGƯỜI MUA (ACCLIME). PDF thường chứa 2 mã số thuế
-    (người bán + người mua) nên ưu tiên mã khớp EXPECTED_TAXCODE,
-    nếu không có thì lấy mã xuất hiện cuối cùng.
+    Lấy mã số thuế NGƯỜI MUA (ACCLIME). Ưu tiên bám theo EXPECTED_TAXCODE.
+    Hỗ trợ đọc cả nhãn "MST" hoặc "Mã số thuế" ở mọi định dạng hoa/thường.
     """
     codes = [
         re.sub(r"[^\d]", "", m.group(1))
-        for m in re.finditer(r"Mã số thuế\s*(?:\([^)]*\))?\s*:\s*([\d\s\-]+)", text)
+        # Thêm từ khóa "MST" và bật cờ re.IGNORECASE
+        for m in re.finditer(r"(?:Mã số thuế|MST)\s*(?:\([^)]*\))?\s*:\s*([\d\s\-]+)", text, re.IGNORECASE)
     ]
     codes = [c for c in codes if c]
+    
     if not codes:
-        # Dự phòng: PDF tách nhãn và giá trị ra dòng khác nhau (Starbucks) —
-        # dò các số 10 chữ số (mã số thuế) và ưu tiên mã của người mua.
         codes = re.findall(r"\b\d{10}\b", text)
+        
     if not codes:
         return ""
-    return next((c for c in codes if c == EXPECTED_TAXCODE), codes[-1])
-
+    
+    # Quét trong danh sách các MST tìm được, lấy đúng mã của ACCLIME như đã cấu hình
+    for c in codes:
+        if c == EXPECTED_TAXCODE:
+            return c
+            
+    # Nếu không khớp EXPECTED_TAXCODE, mặc định lấy mã cuối cùng (thường là của người mua)
+    return codes[-1]
 
 SIGNATURE_RE = re.compile(r"(Signature Valid|Ký bởi|ký điện tử|Signed by|đã ký)", re.IGNORECASE)
 
